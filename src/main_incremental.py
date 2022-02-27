@@ -5,7 +5,10 @@ import argparse
 import importlib
 import numpy as np
 from functools import reduce
-
+from functools import partial
+import pickle
+import random
+import torch.nn as nn
 import utils
 import approach
 from loggers.exp_logger import MultiLogger
@@ -13,7 +16,8 @@ from datasets.data_loader import get_loaders
 from datasets.dataset_config import dataset_config
 from last_layer_analysis import last_layer_analysis
 from networks import tvmodels, allmodels, set_tvmodel_head_var
-
+from networks.network import SplitBatchNorm, NoisyBatchNorm, ContinualNorm, SplitContinualNorm, SplitGroupBatchNorm
+from networks.network import BatchNorm, CustomBatchNorm
 
 def main(argv=None):
     tstart = time.time()
@@ -37,6 +41,29 @@ def main(argv=None):
                         help='Plot last layer analysis (default=%(default)s)')
     parser.add_argument('--no-cudnn-deterministic', action='store_true',
                         help='Disable CUDNN deterministic (default=%(default)s)')
+    
+    # BN related
+    parser.add_argument('--split', default=False, type=bool, required=False,
+                        help='Split Batch Norm (default=%(default)s)')
+    parser.add_argument('--fix-batch', default=False, type=bool, required=False,
+                        help='whether to use fixed ratio of current vs memory in a batch (default=%(default)s)')
+    parser.add_argument("--batch-ratio", default=3, type=int,
+                    help='current vs memory ratio in a batch')
+    parser.add_argument("--log-bn", default=True, type=bool, required=False,
+                        help='Save and log Batch Norm parameter (gamma, beta, running)')
+    parser.add_argument("--model-freeze", default=False, type=bool, required=False,
+                        help="freeze model except BN after first task trained")
+    parser.add_argument("--change-mu", default=False, type=bool, required=False,
+                        help="for analysis, ")
+    parser.add_argument("--noise", default=0, type=float, required=False,
+                    help='noise scale for NoisyBatchNorm')
+    parser.add_argument("--cn", default=0, type=int, required=False,
+                        help="number of groups for continual normalization. if zero, not use CN")
+    parser.add_argument('--bn-splits', default=8, type=int, required=False,
+                        help='simulate multi-gpu behavior of BatchNorm in one gpu; 1 is SyncBatchNorm in multi-gpu')
+    parser.add_argument("--split-group", default=False, type=bool, required=False,
+                        help="Apply SplitGroupBatchNorm ")
+    
     # dataset args
     parser.add_argument('--datasets', default=['cifar100'], type=str, choices=list(dataset_config.keys()),
                         help='Dataset or datasets used (default=%(default)s)', nargs='+', metavar="DATASET")
@@ -54,8 +81,9 @@ def main(argv=None):
                         help='Use validation split instead of test (default=%(default)s)')
     parser.add_argument('--stop-at-task', default=0, type=int, required=False,
                         help='Stop training after specified task (default=%(default)s)')
+    
     # model args
-    parser.add_argument('--network', default='resnet32', type=str, choices=allmodels,
+    parser.add_argument('--network', default='resnet18', type=str, choices=allmodels,
                         help='Network architecture used (default=%(default)s)', metavar="NETWORK")
     parser.add_argument('--keep-existing-head', action='store_true',
                         help='Disable removing classifier last layer (default=%(default)s)')
@@ -66,6 +94,8 @@ def main(argv=None):
                         help='Learning approach used (default=%(default)s)', metavar="APPROACH")
     parser.add_argument('--nepochs', default=200, type=int, required=False,
                         help='Number of epochs per training session (default=%(default)s)')
+    parser.add_argument('--lr-scheduler', default=['multisteplr'], type=str, choices=['adaptive', 'multisteplr'],
+                        help='type of lr scheduler', nargs='*', metavar="LOGGER")
     parser.add_argument('--lr', default=0.1, type=float, required=False,
                         help='Starting learning rate (default=%(default)s)')
     parser.add_argument('--lr-min', default=1e-4, type=float, required=False,
@@ -97,10 +127,12 @@ def main(argv=None):
     # Args -- Incremental Learning Framework
     args, extra_args = parser.parse_known_args(argv)
     args.results_path = os.path.expanduser(args.results_path)
-    base_kwargs = dict(nepochs=args.nepochs, lr=args.lr, lr_min=args.lr_min, lr_factor=args.lr_factor,
+    base_kwargs = dict(nepochs=args.nepochs, lr_scheduler = args.lr_scheduler, lr=args.lr, lr_min=args.lr_min, lr_factor=args.lr_factor,
                        lr_patience=args.lr_patience, clipgrad=args.clipping, momentum=args.momentum,
                        wd=args.weight_decay, multi_softmax=args.multi_softmax, wu_nepochs=args.warmup_nepochs,
-                       wu_lr_factor=args.warmup_lr_factor, fix_bn=args.fix_bn, eval_on_train=args.eval_on_train)
+                       wu_lr_factor=args.warmup_lr_factor, fix_bn=args.fix_bn, eval_on_train=args.eval_on_train,
+                       batch_size = args.batch_size, fix_batch = args.fix_batch, batch_ratio = args.batch_ratio, model_freeze = args.model_freeze, 
+                       change_mu = args.change_mu, noise=args.noise, fix_bn_parameters=args.fix_bn_parameters, cn=args.cn, split_group = args.split_group)
 
     if args.no_cudnn_deterministic:
         print('WARNING: CUDNN Deterministic will be disabled.')
@@ -112,7 +144,12 @@ def main(argv=None):
     for arg in np.sort(list(vars(args).keys())):
         print('\t' + arg + ':', getattr(args, arg))
     print('=' * 108)
-
+    
+    print("args.split",args.split)
+    print("args.fix-batch", args.fix_batch)
+    print("args.change_mu",args.change_mu)
+    print("args.model_freeze", args.model_freeze)
+    
     # Args -- CUDA
     if torch.cuda.is_available():
         torch.cuda.set_device(args.gpu)
@@ -126,19 +163,34 @@ def main(argv=None):
     #     self.C.to(self.device)
     ####################################################################################################################
 
+    norm_layer = nn.BatchNorm2d
+    if args.split:
+        if args.cn>0:
+            if args.split_group:
+                norm_layer = partial(SplitGroupBatchNorm, num_splits=args.bn_splits, num_groups = args.cn)
+            else:
+                norm_layer = partial(SplitContinualNorm, num_splits=args.bn_splits, num_groups=args.cn)
+        else: 
+            norm_layer = partial(SplitBatchNorm, num_splits=args.bn_splits)
+    elif args.noise>0:
+        norm_layer = partial(NoisyBatchNorm, noise_scale=args.noise)
+    elif args.cn > 0:
+        norm_layer = partial(ContinualNorm, num_groups=args.cn)
+    print("norm_layer:",norm_layer)
+    
     # Args -- Network
     from networks.network import LLL_Net
     if args.network in tvmodels:  # torchvision models
         tvnet = getattr(importlib.import_module(name='torchvision.models'), args.network)
         if args.network == 'googlenet':
-            init_model = tvnet(pretrained=args.pretrained, aux_logits=False)
+            init_model = tvnet(pretrained=args.pretrained, aux_logits=False, norm_layer = norm_layer)
         else:
-            init_model = tvnet(pretrained=args.pretrained)
+            init_model = tvnet(pretrained=args.pretrained, norm_layer = norm_layer)
         set_tvmodel_head_var(init_model)
     else:  # other models declared in networks package's init
         net = getattr(importlib.import_module(name='networks'), args.network)
         # WARNING: fixed to pretrained False for other model (non-torchvision)
-        init_model = net(pretrained=False)
+        init_model = net(pretrained=False, norm_layer = norm_layer)
 
     # Args -- Continual Learning Approach
     from approach.incremental_learning import Inc_Learning_Appr
@@ -217,7 +269,7 @@ def main(argv=None):
         appr_ft = Appr_finetuning(net, device, **ft_kwargs)
         gridsearch = GridSearch(appr_ft, args.seed, gs_args.gridsearch_config, gs_args.gridsearch_acc_drop_thr,
                                 gs_args.gridsearch_hparam_decay, gs_args.gridsearch_max_num_searches)
-
+#########################################################################여기 까지 했음##############
     # Loop tasks
     print(taskcla)
     acc_taw = np.zeros((max_task, max_task))
