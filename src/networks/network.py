@@ -1,8 +1,52 @@
 import torch
 from torch import nn
 from copy import deepcopy
+from torchvision.models import resnet
+from functools import partial
 
+import torch.nn.functional as F
+from copy import deepcopy
+import pickle
 
+# SplitBatchNorm: simulate multi-gpu behavior of BatchNorm in one gpu by splitting alone the batch dimension
+# implementation adapted from https://github.com/davidcpage/cifar10-fast/blob/master/torch_backend.py
+class SplitBatchNorm(nn.BatchNorm2d):
+    def __init__(self, num_features, num_splits, **kw):
+        super().__init__(num_features, **kw)
+        self.num_splits = num_splits
+        
+    def forward(self, input):
+        N, C, H, W = input.shape
+
+        if self.training or not self.track_running_stats:
+            running_mean_split = self.running_mean.repeat(self.num_splits)
+            running_var_split = self.running_var.repeat(self.num_splits)
+            outcome = nn.functional.batch_norm(input.view(-1, C * self.num_splits, H, W), running_mean_split, running_var_split, 
+                                                self.weight.repeat(self.num_splits), self.bias.repeat(self.num_splits), True, self.momentum, self.eps).view(N, C, H, W)
+            self.running_mean.data.copy_(running_mean_split.view(self.num_splits, C).mean(dim=0))
+            self.running_var.data.copy_(running_var_split.view(self.num_splits, C).mean(dim=0))
+            return outcome
+        else:
+            return nn.functional.batch_norm(input, self.running_mean, self.running_var, 
+                                            self.weight, self.bias, False, self.momentum, self.eps)
+
+class ContinualNorm(nn.BatchNorm2d):
+    def __init__(self, num_features, num_groups=8, **kw):
+        super().__init__(num_features, **kw)
+        self.G = num_groups
+    
+    def forward(self, input):
+        
+        if self.training or not self.track_running_stats:
+            out_gn = nn.functional.group_norm(input, self.G, None, None, self.eps)
+            outcome = nn.functional.batch_norm(out_gn, self.running_mean, self.running_var, self.weight, self.bias, True, self.momentum, self.eps)
+            return outcome
+        
+        else:
+            out_gn = nn.functional.group_norm(input, self.G, None, None, self.eps)
+            outcome = nn.functional.batch_norm(out_gn, self.running_mean, self.running_var, self.weight, self.bias, False, self.momentum, self.eps)
+            return outcome
+        
 class LLL_Net(nn.Module):
     """Basic class for implementing networks"""
 
@@ -38,14 +82,13 @@ class LLL_Net(nn.Module):
         self._initialize_weights()
 
     def add_head(self, num_outputs):
-        """Add a new head with the corresponding number of outputs. Also update the number of classes per task and the
-        corresponding offsets
-        """
+        """Add a new head with the corresponding number of outputs. Also update the number of classes per task and the corresponding offsets"""
         self.heads.append(nn.Linear(self.out_size, num_outputs))
         # we re-compute instead of append in case an approach makes changes to the heads
         self.task_cls = torch.tensor([head.out_features for head in self.heads])
         self.task_offset = torch.cat([torch.LongTensor(1).zero_(), self.task_cls.cumsum(0)[:-1]])
 
+        ######################여기부터 시작######################
     def forward(self, x, return_features=False):
         """Applies the forward pass
 
@@ -54,6 +97,7 @@ class LLL_Net(nn.Module):
             x (tensor): input images
             return_features (bool): return the representations before the heads
         """
+        
         x = self.model(x)
         assert (len(self.heads) > 0), "Cannot access any head"
         y = []
