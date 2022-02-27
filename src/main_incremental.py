@@ -310,8 +310,7 @@ def main(argv=None):
         net.to(device)
 
         if args.model_freeze:
-            for p in net.model.parameters():
-                p.requires_grad=False
+            net.freeze_backbone()
             print("freeze encoder")
             
             net.freeze_all()
