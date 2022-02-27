@@ -241,41 +241,56 @@ def main(argv=None):
     # Loaders
     utils.seed_everything(seed=args.seed)
     trn_loader, val_loader, tst_loader, taskcla = get_loaders(args.datasets, args.num_tasks, args.nc_first_task,
-                                                              args.batch_size, num_workers=args.num_workers,
-                                                              pin_memory=args.pin_memory)
+                                                              args.batch_size, num_workers=args.num_workers, pin_memory=args.pin_memory)
     # Apply arguments for loaders
     if args.use_valid_only:
         tst_loader = val_loader
     max_task = len(taskcla) if args.stop_at_task == 0 else args.stop_at_task
 
     # Network and Approach instances
-    utils.seed_everything(seed=args.seed)
     net = LLL_Net(init_model, remove_existing_head=not args.keep_existing_head)
-    utils.seed_everything(seed=args.seed)
+    
+    if args.change_mu:
+        task=9
+        for i in range(task+1):
+            net.add_head(10)
+        #PATH = "../results/imagenet100_joint_split_False_num_splits_1_batch_64_Fix-batch_False_Ratio_3_Separate_False_log_bn_gpu1/models/task9.ckpt"
+        PATH = "../results/imagenet100_finetuning_split_True_num_splits_16_batch_64_Fix-batch_False_Ratio_0_model-save_1118_gpu1/models/task9.ckpt"
+        #PATH = "../results/imagenet100_finetuning_split_False_num_splits_1_batch_64_Fix-batch_False_Ratio_3_Separate_False_log_bn_gpu1/models/task9.ckpt"
+        net.load_state_dict(torch.load( PATH ))
+    
     # taking transformations and class indices from first train dataset
     first_train_ds = trn_loader[0].dataset
     transform, class_indices = first_train_ds.transform, first_train_ds.class_indices
     appr_kwargs = {**base_kwargs, **dict(logger=logger, **appr_args.__dict__)}
     if Appr_ExemplarsDataset:
-        appr_kwargs['exemplars_dataset'] = Appr_ExemplarsDataset(transform, class_indices,
-                                                                 **appr_exemplars_dataset_args.__dict__)
-    utils.seed_everything(seed=args.seed)
+        appr_kwargs['exemplars_dataset'] = Appr_ExemplarsDataset(transform, class_indices, **appr_exemplars_dataset_args.__dict__)
+
     appr = Appr(net, device, **appr_kwargs)
 
     # GridSearch
     if args.gridsearch_tasks > 0:
-        ft_kwargs = {**base_kwargs, **dict(logger=logger,
-                                           exemplars_dataset=GridSearch_ExemplarsDataset(transform, class_indices))}
+        ft_kwargs = {**base_kwargs, **dict(logger=logger, exemplars_dataset=GridSearch_ExemplarsDataset(transform, class_indices))}
         appr_ft = Appr_finetuning(net, device, **ft_kwargs)
         gridsearch = GridSearch(appr_ft, args.seed, gs_args.gridsearch_config, gs_args.gridsearch_acc_drop_thr,
                                 gs_args.gridsearch_hparam_decay, gs_args.gridsearch_max_num_searches)
-#########################################################################여기 까지 했음##############
-    # Loop tasks
+
+    
     print(taskcla)
+    dataset_size_arr = []
+    for i in range(args.num_tasks):
+        dataset_size_arr.append(len(trn_loader[i])*args.batch_size)
+    print('num tr dataset : ', dataset_size_arr)
     acc_taw = np.zeros((max_task, max_task))
     acc_tag = np.zeros((max_task, max_task))
     forg_taw = np.zeros((max_task, max_task))
     forg_tag = np.zeros((max_task, max_task))
+    forg_1 = np.zeros((max_task, max_task))
+    forg_2 = np.zeros((max_task, max_task))
+    forg_3 = np.zeros((max_task, max_task))
+    forg_4 = np.zeros((max_task, max_task))
+    
+    # Loop tasks
     for t, (_, ncla) in enumerate(taskcla):
         # Early stop tasks if flag
         if t >= max_task:
@@ -285,10 +300,35 @@ def main(argv=None):
         print('Task {:2d}'.format(t))
         print('*' * 108)
 
-        # Add head for current task
-        net.add_head(taskcla[t][1])
+        if args.change_mu == False:
+            # Add head for current task
+            net.add_head(taskcla[t][1])
+        else:
+            net.task_cls = torch.tensor([10 for k in range(t+1)])
+            net.task_offset = torch.cat([torch.LongTensor(1).zero_(), net.task_cls.cumsum(0)[:-1]])
+            
         net.to(device)
 
+        if args.model_freeze:
+            for p in net.model.parameters():
+                p.requires_grad=False
+            print("freeze encoder")
+            
+            for parameters in net.parameters():
+                parameters.requires_grad = False
+            print("freeze all")
+            
+            """
+            for name, p in net.heads.named_parameters():
+                print("Turn on fc layer")
+                p.requires_grad=True
+            
+            for m in net.model.modules():
+                if isinstance(m, nn.BatchNorm2d) or isinstance(m, SplitBatchNorm):
+                    print("turn on BN")
+                    m.requires_grad=True
+            """
+            
         # GridSearch
         if t < args.gridsearch_tasks:
 
@@ -315,17 +355,24 @@ def main(argv=None):
         # Train
         appr.train(t, trn_loader[t], val_loader[t])
         print('-' * 108)
+        
+        if args.log_bn:
+            # Save Gamma, beta, running_mean, running_var after each task trained
+            appr.model.save_bn_parameters()
+            appr.model.log_bn_parameters(full_exp_name)
 
+        if args.change_mu and t<8:
+            continue
+            
         # Test
         for u in range(t + 1):
-            test_loss, acc_taw[t, u], acc_tag[t, u] = appr.eval(u, tst_loader[u])
+            test_loss, acc_taw[t, u], acc_tag[t, u], forg_1[t, u], forg_2[t, u], forg_3[t, u], forg_4[t, u] = appr.eval(u, tst_loader[u])
             if u < t:
                 forg_taw[t, u] = acc_taw[:t, u].max(0) - acc_taw[t, u]
                 forg_tag[t, u] = acc_tag[:t, u].max(0) - acc_tag[t, u]
             print('>>> Test on task {:2d} : loss={:.3f} | TAw acc={:5.1f}%, forg={:5.1f}%'
-                  '| TAg acc={:5.1f}%, forg={:5.1f}% <<<'.format(u, test_loss,
-                                                                 100 * acc_taw[t, u], 100 * forg_taw[t, u],
-                                                                 100 * acc_tag[t, u], 100 * forg_tag[t, u]))
+                  '| TAg acc={:5.1f}%, forg={:5.1f}% <<<'.format(u, test_loss, 100 * acc_taw[t, u], 100 * forg_taw[t, u],
+                                                                               100 * acc_tag[t, u], 100 * forg_tag[t, u]))
             logger.log_scalar(task=t, iter=u, name='loss', group='test', value=test_loss)
             logger.log_scalar(task=t, iter=u, name='acc_taw', group='test', value=100 * acc_taw[t, u])
             logger.log_scalar(task=t, iter=u, name='acc_tag', group='test', value=100 * acc_tag[t, u])
@@ -338,6 +385,10 @@ def main(argv=None):
         logger.log_result(acc_tag, name="acc_tag", step=t)
         logger.log_result(forg_taw, name="forg_taw", step=t)
         logger.log_result(forg_tag, name="forg_tag", step=t)
+        logger.log_result(forg_1, name="forg_1", step=t)
+        logger.log_result(forg_2, name="forg_2", step=t)
+        logger.log_result(forg_3, name="forg_3", step=t)
+        logger.log_result(forg_4, name="forg_4", step=t)
         logger.save_model(net.state_dict(), task=t)
         logger.log_result(acc_taw.sum(1) / np.tril(np.ones(acc_taw.shape[0])).sum(1), name="avg_accs_taw", step=t)
         logger.log_result(acc_tag.sum(1) / np.tril(np.ones(acc_tag.shape[0])).sum(1), name="avg_accs_tag", step=t)
