@@ -1,21 +1,23 @@
 import time
 import torch
+import torch.optim as optim
 import numpy as np
 from argparse import ArgumentParser
 
 from loggers.exp_logger import ExperimentLogger
 from datasets.exemplars_dataset import ExemplarsDataset
-
+from itertools import cycle
 
 class Inc_Learning_Appr:
     """Basic class for implementing incremental learning approaches"""
 
-    def __init__(self, model, device, nepochs=100, lr=0.05, lr_min=1e-4, lr_factor=3, lr_patience=5, clipgrad=10000,
-                 momentum=0, wd=0, multi_softmax=False, wu_nepochs=0, wu_lr_factor=1, fix_bn=False,
-                 eval_on_train=False, logger: ExperimentLogger = None, exemplars_dataset: ExemplarsDataset = None):
+    def __init__(self, model, device, nepochs=100, lr_scheduler = 'multisteplr', lr=0.05, lr_min=1e-4, lr_factor=3, lr_patience=5, clipgrad=10000, momentum=0, wd=0, 
+                 multi_softmax=False, wu_nepochs=0, wu_lr_factor=1, fix_bn=False, eval_on_train=True, logger: ExperimentLogger = None, exemplars_dataset: ExemplarsDataset = None,
+                 batch_size=64, fix_batch=False, batch_ratio=3, model_freeze=False, change_mu=False,noise=0, cn=8, split_group=False):
         self.model = model
         self.device = device
         self.nepochs = nepochs
+        self.lr_scheduler = lr_scheduler
         self.lr = lr
         self.lr_min = lr_min
         self.lr_factor = lr_factor
@@ -32,6 +34,11 @@ class Inc_Learning_Appr:
         self.fix_bn = fix_bn
         self.eval_on_train = eval_on_train
         self.optimizer = None
+        self.batch_size = batch_size
+        self.fix_batch = fix_batch
+        self.batch_ratio = batch_ratio
+        self.model_freeze = model_freeze
+        self.change_mu = change_mu
 
     @staticmethod
     def extra_parser(args):
@@ -95,23 +102,29 @@ class Inc_Learning_Appr:
                 self.logger.log_scalar(task=t, iter=e + 1, name="loss", value=trn_loss, group="warmup")
                 self.logger.log_scalar(task=t, iter=e + 1, name="acc", value=100 * trn_acc, group="warmup")
 
-    def train_loop(self, t, trn_loader, val_loader):
+    def train_loop(self, t, trn_loader, val_loader, exemplars_loader = None):
         """Contains the epochs loop"""
+        if self.change_mu and t<9:
+            print("loop passed")
+            return
+        
         lr = self.lr
         best_loss = np.inf
         patience = self.lr_patience
         best_model = self.model.get_copy()
 
         self.optimizer = self._get_optimizer()
-
+        if 'multisteplr' in self.lr_scheduler :
+                scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[30,60,80,90], gamma=1/self.lr_factor)
+                
         # Loop epochs
         for e in range(self.nepochs):
             # Train
             clock0 = time.time()
-            self.train_epoch(t, trn_loader)
+            self.train_epoch(t, trn_loader, exemplars_loader)
             clock1 = time.time()
             if self.eval_on_train:
-                train_loss, train_acc, _ = self.eval(t, trn_loader)
+                train_loss, train_acc, _, _, _, _, _ = self.eval(t, trn_loader)
                 clock2 = time.time()
                 print('| Epoch {:3d}, time={:5.1f}s/{:5.1f}s | Train: loss={:.3f}, TAw acc={:5.1f}% |'.format(
                     e + 1, clock1 - clock0, clock2 - clock1, train_loss, 100 * train_acc), end='')
@@ -122,35 +135,44 @@ class Inc_Learning_Appr:
 
             # Valid
             clock3 = time.time()
-            valid_loss, valid_acc, _ = self.eval(t, val_loader)
+            valid_loss, valid_acc, _, _, _, _, _ = self.eval(t, val_loader)
             clock4 = time.time()
             print(' Valid: time={:5.1f}s loss={:.3f}, TAw acc={:5.1f}% |'.format(
                 clock4 - clock3, valid_loss, 100 * valid_acc), end='')
             self.logger.log_scalar(task=t, iter=e + 1, name="loss", value=valid_loss, group="valid")
             self.logger.log_scalar(task=t, iter=e + 1, name="acc", value=100 * valid_acc, group="valid")
-
-            # Adapt learning rate - patience scheme - early stopping regularization
-            if valid_loss < best_loss:
-                # if the loss goes down, keep it as the best model and end line with a star ( * )
-                best_loss = valid_loss
-                best_model = self.model.get_copy()
-                patience = self.lr_patience
-                print(' *', end='')
-            else:
-                # if the loss does not go down, decrease patience
-                patience -= 1
-                if patience <= 0:
-                    # if it runs out of patience, reduce the learning rate
-                    lr /= self.lr_factor
-                    print(' lr={:.1e}'.format(lr), end='')
-                    if lr < self.lr_min:
-                        # if the lr decreases below minimum, stop the training session
-                        print()
-                        break
-                    # reset patience and recover best model so far to continue training
+            
+            if 'adaptive' in self.lr_scheduler:
+                # Adapt learning rate - patience scheme - early stopping regularization
+                if valid_loss < best_loss:
+                    # if the loss goes down, keep it as the best model and end line with a star ( * )
+                    best_loss = valid_loss
+                    best_model = self.model.get_copy()
                     patience = self.lr_patience
-                    self.optimizer.param_groups[0]['lr'] = lr
-                    self.model.set_state_dict(best_model)
+                    print(' *', end='')
+                else:
+                    # if the loss does not go down, decrease patience
+                    patience -= 1
+                    if patience <= 0:
+                        # if it runs out of patience, reduce the learning rate
+                        lr /= self.lr_factor
+                        print(' lr={:.1e}'.format(lr), end='')
+                        if lr < self.lr_min:
+                            # if the lr decreases below minimum, stop the training session
+                            print()
+                            break
+                        # reset patience and recover best model so far to continue training
+                        patience = self.lr_patience
+                        self.optimizer.param_groups[0]['lr'] = lr
+                        self.model.set_state_dict(best_model)
+            else:
+                if valid_loss < best_loss:
+                    # if the loss goes down, keep it as the best model and end line with a star ( * )
+                    best_loss = valid_loss
+                    best_model = self.model.get_copy()
+                    print(' *', end='')
+                scheduler.step()
+                
             self.logger.log_scalar(task=t, iter=e + 1, name="patience", value=patience, group="train")
             self.logger.log_scalar(task=t, iter=e + 1, name="lr", value=lr, group="train")
             print()
@@ -160,37 +182,73 @@ class Inc_Learning_Appr:
         """Runs after training all the epochs of the task (after the train session)"""
         pass
 
-    def train_epoch(self, t, trn_loader):
+    def train_epoch(self, t, trn_loader, exemplars_loader = None):
         """Runs a single epoch"""
+        
         self.model.train()
         if self.fix_bn and t > 0:
             self.model.freeze_bn()
-        for images, targets in trn_loader:
-            # Forward current model
-            outputs = self.model(images.to(self.device))
-            loss = self.criterion(t, outputs, targets.to(self.device))
-            # Backward
-            self.optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clipgrad)
-            self.optimizer.step()
+        
+        # 1) fix_batch (ratio preserving batch scenario)
+        if exemplars_loader != None:
+            if len(trn_loader) >= len(exemplars_loader):
+                exemplars_loader = cycle(exemplars_loader)
+            else:
+                trn_loader = cycle(trn_loader)
+                
+            for i, data in enumerate(zip(trn_loader, exemplars_loader)):
+                
+                images = torch.cat((current_images, previous_images),dim=0)
+                targets = torch.cat((current_targets, previous_targets) , dim=0)
+                
+                if images.shape[0] != self.batch_size:
+                    continue
+                    
+                outputs = self.model(images.to(self.device))
+                loss = self.criterion(t, outputs, targets.to(self.device))
+                
+                self.optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clipgrad)
+                self.optimizer.step()
+        
+        else:
+            
+            for images, targets in trn_loader:
+                if images.shape[0] != self.batch_size:
+                    continue
+                # Forward current model
+                outputs = self.model(images.to(self.device))
+                loss = self.criterion(t, outputs, targets.to(self.device))
+                # Backward
+                self.optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clipgrad)
+                self.optimizer.step()
 
     def eval(self, t, val_loader):
         """Contains the evaluation code"""
         with torch.no_grad():
-            total_loss, total_acc_taw, total_acc_tag, total_num = 0, 0, 0, 0
+            total_loss, total_acc_taw, total_acc_tag, total_num, total_forg, total_forg_1, total_forg_2, total_forg_3, total_forg_4 = 0, 0, 0, 0, 0, 0, 0, 0, 0
             self.model.eval()
             for images, targets in val_loader:
                 # Forward current model
                 outputs = self.model(images.to(self.device))
                 loss = self.criterion(t, outputs, targets.to(self.device))
                 hits_taw, hits_tag = self.calculate_metrics(outputs, targets)
+                forg_1, forg_2, forg_3, forg_4 = self.calculate_forgetting_metrics(outputs, targets)
                 # Log
                 total_loss += loss.item() * len(targets)
                 total_acc_taw += hits_taw.sum().item()
                 total_acc_tag += hits_tag.sum().item()
+                total_forg += forg_1 + forg_2 + forg_3 + forg_4
+                total_forg_1 += forg_1
+                total_forg_2 += forg_2
+                total_forg_3 += forg_3
+                total_forg_4 += forg_4
                 total_num += len(targets)
-        return total_loss / total_num, total_acc_taw / total_num, total_acc_tag / total_num
+            assert total_acc_tag + total_forg == total_num
+        return total_loss / total_num, total_acc_taw / total_num, total_acc_tag / total_num, total_forg_1, total_forg_2, total_forg_3, total_forg_4
 
     def calculate_metrics(self, outputs, targets):
         """Contains the main Task-Aware and Task-Agnostic metrics"""
@@ -208,7 +266,35 @@ class Inc_Learning_Appr:
             pred = torch.cat(outputs, dim=1).argmax(1)
         hits_tag = (pred == targets.to(self.device)).float()
         return hits_taw, hits_tag
-
+    
+    def calculate_forgetting_metrics(self, outputs, targets):
+        
+        forg_1, forg_2, forg_3, forg_4 = 0, 0, 0, 0
+        task_cumsum = self.model.task_cls.cumsum(0)
+        if len(task_cumsum) == 1:
+            prev_cls = 0
+            cur_cls = 10
+        else:
+            prev_cls = task_cumsum[-2]
+            cur_cls = task_cumsum[-1]
+        
+        pred = torch.cat(outputs, dim=1).argmax(1) #Tag case
+        
+        for m in range(len(pred)):
+            if pred[m] != targets[m]:
+                if targets[m] >= prev_cls : # label : current class
+                    if pred[m] >= prev_cls:  # prediction : current class
+                        forg_4 += 1
+                    else:                # prediction : previous class
+                        forg_3 += 1
+                elif targets[m] < prev_cls: # label : previous class
+                    if pred[m] >= prev_cls: # prediction : current class
+                        forg_2 += 1
+                    else:                  # prediction : previous class
+                        forg_1 += 1
+        
+        return forg_1, forg_2, forg_3, forg_4
+    
     def criterion(self, t, outputs, targets):
         """Returns the loss value"""
         return torch.nn.functional.cross_entropy(outputs[t], targets - self.model.task_offset[t])
