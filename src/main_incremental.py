@@ -314,8 +314,7 @@ def main(argv=None):
                 p.requires_grad=False
             print("freeze encoder")
             
-            for parameters in net.parameters():
-                parameters.requires_grad = False
+            net.freeze_all()
             print("freeze all")
             
             """
