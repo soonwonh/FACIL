@@ -1,5 +1,7 @@
 import torch
+import numpy as np
 from argparse import ArgumentParser
+from torch.utils.data import DataLoader, 
 
 from .incremental_learning import Inc_Learning_Appr
 from datasets.exemplars_dataset import ExemplarsDataset
@@ -8,13 +10,14 @@ from datasets.exemplars_dataset import ExemplarsDataset
 class Appr(Inc_Learning_Appr):
     """Class implementing the finetuning baseline"""
 
-    def __init__(self, model, device, nepochs=100, lr=0.05, lr_min=1e-4, lr_factor=3, lr_patience=5, clipgrad=10000,
-                 momentum=0, wd=0, multi_softmax=False, wu_nepochs=0, wu_lr_factor=1, fix_bn=False, eval_on_train=False,
-                 logger=None, exemplars_dataset=None, all_outputs=False):
-        super(Appr, self).__init__(model, device, nepochs, lr, lr_min, lr_factor, lr_patience, clipgrad, momentum, wd,
-                                   multi_softmax, wu_nepochs, wu_lr_factor, fix_bn, eval_on_train, logger,
-                                   exemplars_dataset)
+    def __init__(self, model, device, nepochs=100, lr_scheduler = 'multisteplr', lr=0.05, lr_min=1e-4, lr_factor=3, lr_patience=5, clipgrad=10000,
+                 momentum=0, wd=0, multi_softmax=False, wu_nepochs=0, wu_lr_factor=1, fix_bn=False, eval_on_train=False, logger=None, exemplars_dataset=None, 
+                 all_outputs=False, batch_size=64, fix_batch=False, batch_ratio=3, model_freeze = False, change_mu=False, noise=0, cn=8, split_group=False): ):
+        super(Appr, self).__init__(model, device, nepochs, lr_scheduler, lr, lr_min, lr_factor, lr_patience, clipgrad, momentum, wd,
+                                   multi_softmax, wu_nepochs, wu_lr_factor, fix_bn, eval_on_train, logger, exemplars_dataset,
+                                   batch_size, fix_batch, batch_ratio, model_freeze, change_mu, noise, cn, split_group)
         self.all_out = all_outputs
+        print("all_outputs : ", all_outputs)
 
     @staticmethod
     def exemplars_dataset_class():
@@ -40,16 +43,50 @@ class Appr(Inc_Learning_Appr):
     def train_loop(self, t, trn_loader, val_loader):
         """Contains the epochs loop"""
 
-        # add exemplars to train_loader
+        exemplars_loader = None
+        current_loader = None
+        
+        if t>0:
+            if self.fix_batch:
+                current_batch = int(self.batch_size * self.batch_ratio / (self.batch_ratio + 1))
+                current_loader = torch.utils.data.DataLoader(trn_loader.dataset,
+                                                     batch_size=current_batch,
+                                                     shuffle=True,
+                                                     num_workers=trn_loader.num_workers,
+                                                     pin_memory=trn_loader.pin_memory,
+                                                     worker_init_fn=np.random.seed(0))
+                exemplars_batch = int(self.batch_size / (self.batch_ratio + 1))
+                exemplars_loader = torch.utils.data.DataLoader(self.exemplars_dataset,
+                                                     batch_size=exemplars_batch,
+                                                     shuffle=True,
+                                                     num_workers=trn_loader.num_workers,
+                                                     pin_memory=trn_loader.pin_memory,
+                                                     worker_init_fn=np.random.seed(0))
+            else:
+                trn_loader = torch.utils.data.DataLoader(trn_loader.dataset + self.exemplars_dataset,
+                                                         batch_size=trn_loader.batch_size,
+                                                         shuffle=True,
+                                                         num_workers=trn_loader.num_workers,
+                                                         pin_memory=trn_loader.pin_memory,
+                                                         worker_init_fn=np.random.seed(0))
+            
+        
+         # FINETUNING TRAINING -- contains the epochs loop
         if len(self.exemplars_dataset) > 0 and t > 0:
+            if self.fix_batch:
+                print("fix_batch")
+                super().train_loop(t, current_loader, val_loader, exemplars_loader)
+            else:
+                super().train_loop(t, trn_loader, val_loader)
+        
+        # add exemplars to train_loader
+        if self.fix_batch:
             trn_loader = torch.utils.data.DataLoader(trn_loader.dataset + self.exemplars_dataset,
                                                      batch_size=trn_loader.batch_size,
                                                      shuffle=True,
                                                      num_workers=trn_loader.num_workers,
                                                      pin_memory=trn_loader.pin_memory)
 
-        # FINETUNING TRAINING -- contains the epochs loop
-        super().train_loop(t, trn_loader, val_loader)
 
         # EXEMPLAR MANAGEMENT -- select training subset
         self.exemplars_dataset.collect_exemplars(self.model, trn_loader, val_loader.dataset.transform)
