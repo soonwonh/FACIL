@@ -42,6 +42,7 @@ class MultiLogger(ExperimentLogger):
             os.makedirs(os.path.join(self.exp_path, 'models'))
             os.makedirs(os.path.join(self.exp_path, 'results'))
             os.makedirs(os.path.join(self.exp_path, 'figures'))
+            os.makedirs(os.path.join(self.exp_path, 'bn_parameters'))
 
         self.save_models = save_models
         self.loggers = []
