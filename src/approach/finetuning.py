@@ -76,6 +76,8 @@ class Appr(Inc_Learning_Appr):
             if self.fix_batch:
                 print("fix_batch")
                 super().train_loop(t, current_loader, val_loader, exemplars_loader)
+            else:
+                super().train_loop(t, trn_loader, val_loader)
         else:
             super().train_loop(t, trn_loader, val_loader)
         
