@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from argparse import ArgumentParser
-from torch.utils.data import DataLoader, 
+from torch.utils.data import DataLoader
 
 from .incremental_learning import Inc_Learning_Appr
 from datasets.exemplars_dataset import ExemplarsDataset
@@ -12,7 +12,7 @@ class Appr(Inc_Learning_Appr):
 
     def __init__(self, model, device, nepochs=100, lr_scheduler = 'multisteplr', lr=0.05, lr_min=1e-4, lr_factor=3, lr_patience=5, clipgrad=10000,
                  momentum=0, wd=0, multi_softmax=False, wu_nepochs=0, wu_lr_factor=1, fix_bn=False, eval_on_train=False, logger=None, exemplars_dataset=None, 
-                 all_outputs=False, batch_size=64, fix_batch=False, batch_ratio=3, model_freeze = False, change_mu=False, noise=0, cn=8, split_group=False): ):
+                 all_outputs=False, batch_size=64, fix_batch=False, batch_ratio=3, model_freeze = False, change_mu=False, noise=0, cn=8, split_group=False):
         super(Appr, self).__init__(model, device, nepochs, lr_scheduler, lr, lr_min, lr_factor, lr_patience, clipgrad, momentum, wd,
                                    multi_softmax, wu_nepochs, wu_lr_factor, fix_bn, eval_on_train, logger, exemplars_dataset,
                                    batch_size, fix_batch, batch_ratio, model_freeze, change_mu, noise, cn, split_group)
