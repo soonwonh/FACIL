@@ -119,7 +119,7 @@ def main(argv=None):
                         help='Apply separate softmax for each task (default=%(default)s)')
     parser.add_argument('--fix-bn', action='store_true',
                         help='Fix batch normalization after first task (default=%(default)s)')
-    parser.add_argument('--eval-on-train', action='store_true',
+    parser.add_argument("--eval-on-train", default=True, type=bool, required=False,
                         help='Show train loss and accuracy (default=%(default)s)')
     # gridsearch args
     parser.add_argument('--gridsearch-tasks', default=-1, type=int,
