@@ -4,18 +4,7 @@ SEED_NUM=0
 DATE='1111'
 #APPROACH = ['finetuning', 'joint', 'bic', 'lucir']
 
-# CON_ALPHA=0.1
-# EXP_NAME="con_alpha_${CON_ALPHA}"
 
-# CUDA_VISIBLE_DEVICES=2 python main_incremental.py --gpu $GPU_NUM --seed $SEED_NUM --approach 'bic' --datasets 'imagenet100' --network 'resnet18' --batch-size 64 --num-tasks 10 --nepochs 100  --num-exemplars 2000 --lr-factor 10 --weight-decay 0.0001 --exemplar-selection random  --num-workers 8  --lr-scheduler 'multisteplr'
-
-
-# CUDA_VISIBLE_DEVICES=2 python main_incremental.py --gpu $GPU_NUM --seed $SEED_NUM --approach 'bic' --datasets 'imagenet100' --network 'resnet18' --batch-size 64 --num-tasks 10 --nepochs 100  --num-exemplars 2000 --lr-factor 10 --weight-decay 0.0001 --exemplar-selection random --num-workers 8 --datasets-unsup 'MS_COCO_2017_unsup'
-
-
-CON_ALPHA=0.1
-CON_STRATEGY='SimCLR'
-PROTOTYPES=0
 
 
 BATCH=64
@@ -23,12 +12,12 @@ SPLIT=False
 NUM_SPLITS=1
 RATIO=3
 FIX=False
-SEPERATE=False
-CN=8
-EXP_NAME="split_${SPLIT}_num_splits_${NUM_SPLITS}_batch_${BATCH}_Fix-batch_${FIX}_Ratio_${RATIO}_CN_${CN}_1215_gpu0"
+CN=0
+EXP_NAME="split_${SPLIT}_num_splits_${NUM_SPLITS}_batch_${BATCH}_Fix-batch_${FIX}_Ratio_${RATIO}_CN_${CN}_0312_gpu0"
 NOTE="load BN apply Split-BN, update only running mean"
 
-CUDA_VISIBLE_DEVICES=0 python3 main_incremental.py --gpu $GPU_NUM --seed $SEED_NUM --approach 'bic' --datasets 'imagenet100' --network 'resnet18' --batch-size $BATCH --num-tasks 10 --nepochs 100  --num-exemplars 2000 --lr-factor 10 --weight-decay 0.0001 --exemplar-selection random --num-workers 8 --con-temp 0.1 --con-alpha $CON_ALPHA --exp-name $EXP_NAME --con-strategy $CON_STRATEGY --nmb_prototypes $PROTOTYPES --bn-splits $NUM_SPLITS --log-bn True --last-layer-analysis --cn $CN
+CUDA_VISIBLE_DEVICES=0 python3 main_incremental.py --gpu $GPU_NUM --seed $SEED_NUM --approach 'finetuning' --datasets 'cifar100' --network 'resnet32' --batch-size $BATCH --num-tasks 10 --nepochs 100  --num-exemplars 2000 --lr-factor 10 --weight-decay 0.0001 --exemplar-selection random --num-workers 8 --con-temp 0.1  --exp-name $EXP_NAME --bn-splits $NUM_SPLITS --log-bn True --last-layer-analysis
+
 
 BATCH=64
 SPLIT=False
@@ -40,7 +29,7 @@ CN=16
 EXP_NAME="split_${SPLIT}_num_splits_${NUM_SPLITS}_batch_${BATCH}_Fix-batch_${FIX}_Ratio_${RATIO}_CN_${CN}_1215_gpu0"
 NOTE="load BN apply Split-BN, update only running mean"
 
-CUDA_VISIBLE_DEVICES=0 python3 main_incremental.py --gpu $GPU_NUM --seed $SEED_NUM --approach 'bic' --datasets 'imagenet100' --network 'resnet18' --batch-size $BATCH --num-tasks 10 --nepochs 100  --num-exemplars 2000 --lr-factor 10 --weight-decay 0.0001 --exemplar-selection random --num-workers 8 --con-temp 0.1 --con-alpha $CON_ALPHA --exp-name $EXP_NAME --con-strategy $CON_STRATEGY --nmb_prototypes $PROTOTYPES --bn-splits $NUM_SPLITS --log-bn True --last-layer-analysis --cn $CN
+#CUDA_VISIBLE_DEVICES=0 python3 main_incremental.py --gpu $GPU_NUM --seed $SEED_NUM --approach 'bic' --datasets 'imagenet100' --network 'resnet18' --batch-size $BATCH --num-tasks 10 --nepochs 100  --num-exemplars 2000 --lr-factor 10 --weight-decay 0.0001 --exemplar-selection random --num-workers 8 --con-temp 0.1 --con-alpha $CON_ALPHA --exp-name $EXP_NAME --con-strategy $CON_STRATEGY --nmb_prototypes $PROTOTYPES --bn-splits $NUM_SPLITS --log-bn True --last-layer-analysis --cn $CN
 
 BATCH=64
 SPLIT=False
@@ -52,7 +41,7 @@ CN=32
 EXP_NAME="split_${SPLIT}_num_splits_${NUM_SPLITS}_batch_${BATCH}_Fix-batch_${FIX}_Ratio_${RATIO}_CN_${CN}_1215_gpu0"
 NOTE="load BN apply Split-BN, update only running mean"
 
-CUDA_VISIBLE_DEVICES=0 python3 main_incremental.py --gpu $GPU_NUM --seed $SEED_NUM --approach 'bic' --datasets 'imagenet100' --network 'resnet18' --batch-size $BATCH --num-tasks 10 --nepochs 100  --num-exemplars 2000 --lr-factor 10 --weight-decay 0.0001 --exemplar-selection random --num-workers 8 --con-temp 0.1 --con-alpha $CON_ALPHA --exp-name $EXP_NAME --con-strategy $CON_STRATEGY --nmb_prototypes $PROTOTYPES --bn-splits $NUM_SPLITS --log-bn True --last-layer-analysis --cn $CN
+#CUDA_VISIBLE_DEVICES=0 python3 main_incremental.py --gpu $GPU_NUM --seed $SEED_NUM --approach 'bic' --datasets 'imagenet100' --network 'resnet18' --batch-size $BATCH --num-tasks 10 --nepochs 100  --num-exemplars 2000 --lr-factor 10 --weight-decay 0.0001 --exemplar-selection random --num-workers 8 --con-temp 0.1 --con-alpha $CON_ALPHA --exp-name $EXP_NAME --con-strategy $CON_STRATEGY --nmb_prototypes $PROTOTYPES --bn-splits $NUM_SPLITS --log-bn True --last-layer-analysis --cn $CN
 
 BATCH=64
 SPLIT=False
@@ -64,7 +53,7 @@ CN=64
 EXP_NAME="split_${SPLIT}_num_splits_${NUM_SPLITS}_batch_${BATCH}_Fix-batch_${FIX}_Ratio_${RATIO}_CN_${CN}_1215_gpu0"
 NOTE="load BN apply Split-BN, update only running mean"
 
-CUDA_VISIBLE_DEVICES=0 python3 main_incremental.py --gpu $GPU_NUM --seed $SEED_NUM --approach 'bic' --datasets 'imagenet100' --network 'resnet18' --batch-size $BATCH --num-tasks 10 --nepochs 100  --num-exemplars 2000 --lr-factor 10 --weight-decay 0.0001 --exemplar-selection random --num-workers 8 --con-temp 0.1 --con-alpha $CON_ALPHA --exp-name $EXP_NAME --con-strategy $CON_STRATEGY --nmb_prototypes $PROTOTYPES --bn-splits $NUM_SPLITS --log-bn True --last-layer-analysis --cn $CN
+#CUDA_VISIBLE_DEVICES=0 python3 main_incremental.py --gpu $GPU_NUM --seed $SEED_NUM --approach 'bic' --datasets 'imagenet100' --network 'resnet18' --batch-size $BATCH --num-tasks 10 --nepochs 100  --num-exemplars 2000 --lr-factor 10 --weight-decay 0.0001 --exemplar-selection random --num-workers 8 --con-temp 0.1 --con-alpha $CON_ALPHA --exp-name $EXP_NAME --con-strategy $CON_STRATEGY --nmb_prototypes $PROTOTYPES --bn-splits $NUM_SPLITS --log-bn True --last-layer-analysis --cn $CN
 
 BATCH=10
 SPLIT=False
