@@ -58,7 +58,7 @@ class LLL_Net(nn.Module):
         assert not remove_existing_head or type(getattr(model, head_var)) in [nn.Sequential, nn.Linear], \
             "Given model's head {} does is not an instance of nn.Sequential or nn.Linear".format(head_var)
         super(LLL_Net, self).__init__()
-        self._initialize_weights()
+        self._initialize()
         self.model = model
         last_layer = getattr(self.model, head_var)
 
@@ -79,7 +79,7 @@ class LLL_Net(nn.Module):
         self.heads = nn.ModuleList()
         self.task_cls = []
         self.task_offset = []
-        self._initialize_weights()
+
 
     def add_head(self, num_outputs):
         """Add a new head with the corresponding number of outputs. Also update the number of classes per task and the corresponding offsets"""
