@@ -133,7 +133,7 @@ def main(argv=None):
                        wd=args.weight_decay, multi_softmax=args.multi_softmax, wu_nepochs=args.warmup_nepochs,
                        wu_lr_factor=args.warmup_lr_factor, fix_bn=args.fix_bn, eval_on_train=args.eval_on_train,
                        batch_size = args.batch_size, fix_batch = args.fix_batch, batch_ratio = args.batch_ratio, model_freeze = args.model_freeze, 
-                       change_mu = args.change_mu, noise=args.noise, fix_bn_parameters=args.fix_bn_parameters, cn=args.cn, split_group = args.split_group)
+                       change_mu = args.change_mu, noise=args.noise, cn=args.cn, split_group = args.split_group)
 
     if args.no_cudnn_deterministic:
         print('WARNING: CUDNN Deterministic will be disabled.')
